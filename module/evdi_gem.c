@@ -10,6 +10,10 @@
 
 #include <linux/sched.h>
 #include <linux/version.h>
+#if KERNEL_VERSION(5, 18, 0) <= LINUX_VERSION_CODE
+#elif KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE
+#include <linux/dma-buf-map.h>
+#endif
 #if KERNEL_VERSION(5, 16, 0) <= LINUX_VERSION_CODE
 #include <drm/drm_prime.h>
 #include <drm/drm_file.h>
@@ -54,6 +58,14 @@ static bool evdi_was_called_by_mutter(void)
 	get_task_comm(task_comm, current);
 
 	return strcmp(task_comm, "gnome-shell") == 0;
+}
+
+static bool evdi_drm_gem_object_use_import_attach(struct drm_gem_object *obj)
+{
+	if (!obj || !obj->import_attach || !obj->import_attach->dmabuf->owner)
+		return false;
+
+	return strcmp(obj->import_attach->dmabuf->owner->name, "amdgpu") != 0;
 }
 
 uint32_t evdi_gem_object_handle_lookup(struct drm_file *filp,
@@ -233,7 +245,7 @@ static int evdi_gem_get_pages(struct evdi_gem_object *obj,
 	obj->pages = pages;
 
 #if defined(CONFIG_X86)
-	drm_clflush_pages(obj->pages, obj->base.size / PAGE_SIZE);
+	drm_clflush_pages(obj->pages, DIV_ROUND_UP(obj->base.size, PAGE_SIZE));
 #endif
 
 	return 0;
@@ -275,13 +287,17 @@ static void evdi_unpin_pages(struct evdi_gem_object *obj)
 
 int evdi_gem_vmap(struct evdi_gem_object *obj)
 {
-	int page_count = obj->base.size / PAGE_SIZE;
+	int page_count = DIV_ROUND_UP(obj->base.size, PAGE_SIZE);
 	int ret;
 
-	if (obj->base.import_attach) {
-#if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
-		struct dma_buf_map map;
+	if (evdi_drm_gem_object_use_import_attach(&obj->base)) {
+#if KERNEL_VERSION(5, 18, 0) <= LINUX_VERSION_CODE
+		struct iosys_map map = IOSYS_MAP_INIT_VADDR(NULL);
+#elif KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
+		struct dma_buf_map map = DMA_BUF_MAP_INIT_VADDR(NULL);
+#endif
 
+#if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
 		ret = dma_buf_vmap(obj->base.import_attach->dmabuf, &map);
 		if (ret)
 			return -ENOMEM;
@@ -307,8 +323,18 @@ int evdi_gem_vmap(struct evdi_gem_object *obj)
 
 void evdi_gem_vunmap(struct evdi_gem_object *obj)
 {
-	if (obj->base.import_attach) {
-#if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
+	if (evdi_drm_gem_object_use_import_attach(&obj->base)) {
+#if KERNEL_VERSION(5, 18, 0) <= LINUX_VERSION_CODE
+		struct iosys_map map = IOSYS_MAP_INIT_VADDR(NULL);
+
+		if (obj->vmap_is_iomem)
+			iosys_map_set_vaddr_iomem(&map, obj->vmapping);
+		else
+			iosys_map_set_vaddr(&map, obj->vmapping);
+
+		dma_buf_vunmap(obj->base.import_attach->dmabuf, &map);
+
+#elif KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
 		struct dma_buf_map map;
 
 		if (obj->vmap_is_iomem)
@@ -403,16 +429,11 @@ evdi_prime_import_sg_table(struct drm_device *dev,
 
 	called_by_mutter = evdi_was_called_by_mutter();
 
-	if (evdi_disable_texture_import ||
-	    (called_by_mutter && strcmp(attach->dmabuf->owner->name, "amdgpu") == 0)) {
-		return ERR_PTR(-ENOMEM);
-	}
-
 	obj = evdi_gem_alloc_object(dev, attach->dmabuf->size);
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
 
-	npages = PAGE_ALIGN(attach->dmabuf->size) / PAGE_SIZE;
+	npages = DIV_ROUND_UP(attach->dmabuf->size, PAGE_SIZE);
 	DRM_DEBUG_PRIME("Importing %d pages\n", npages);
 	obj->pages = kvmalloc_array(npages, sizeof(struct page *), GFP_KERNEL);
 	if (!obj->pages) {

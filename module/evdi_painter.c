@@ -574,7 +574,7 @@ struct drm_clip_rect evdi_painter_framebuffer_size(
 	efb = painter->scanout_fb;
 	if (!efb) {
 		if (painter->is_connected)
-			EVDI_DEBUG("Scanout buffer not set.");
+			EVDI_WARN("Scanout buffer not set.");
 		goto unlock;
 	}
 	rect.x1 = 0;
@@ -602,7 +602,7 @@ void evdi_painter_mark_dirty(struct evdi_device *evdi,
 	efb = painter->scanout_fb;
 	if (!efb) {
 		if (painter->is_connected)
-			EVDI_DEBUG("(card%d) Skip clip rect. Scanout buffer not set.\n",
+			EVDI_WARN("(card%d) Skip clip rect. Scanout buffer not set.\n",
 			   evdi->dev_index);
 		goto unlock;
 	}
@@ -832,7 +832,8 @@ static void evdi_remove_i2c_adapter(struct evdi_device *evdi)
 static int
 evdi_painter_connect(struct evdi_device *evdi,
 		     void const __user *edid_data, unsigned int edid_length,
-		     uint32_t sku_area_limit,
+		     uint32_t pixel_area_limit,
+		     uint32_t pixel_per_second_limit,
 		     struct drm_file *file, __always_unused int dev_index)
 {
 	struct evdi_painter *painter = evdi->painter;
@@ -877,7 +878,8 @@ evdi_painter_connect(struct evdi_device *evdi,
 
 	painter_lock(painter);
 
-	evdi->sku_area_limit = sku_area_limit;
+        evdi->pixel_area_limit = pixel_area_limit;
+	evdi->pixel_per_second_limit = pixel_per_second_limit;
 	painter->drm_filp = file;
 	kfree(painter->edid);
 	painter->edid_length = edid_length;
@@ -969,7 +971,8 @@ int evdi_painter_connect_ioctl(struct drm_device *drm_dev, void *data,
 			ret = evdi_painter_connect(evdi,
 					     cmd->edid,
 					     cmd->edid_length,
-					     cmd->sku_area_limit,
+					     cmd->pixel_area_limit,
+					     cmd->pixel_per_second_limit,
 					     file,
 					     cmd->dev_index);
 		else
@@ -1073,7 +1076,7 @@ int evdi_painter_grabpix_ioctl(struct drm_device *drm_dev, void *data,
 
 	if ((unsigned int)cmd->buf_width != efb->base.width ||
 		(unsigned int)cmd->buf_height != efb->base.height) {
-		EVDI_ERROR("Invalid buffer dimension\n");
+		EVDI_DEBUG("Invalid buffer dimension\n");
 		err = -EINVAL;
 		goto err_fb;
 	}
@@ -1197,6 +1200,9 @@ void evdi_painter_cleanup(struct evdi_painter *painter)
 	kfree(painter->edid);
 	painter->edid_length = 0;
 	painter->edid = NULL;
+	if (painter->scanout_fb)
+		drm_framebuffer_put(&painter->scanout_fb->base);
+	painter->scanout_fb = NULL;
 
 	evdi_painter_send_vblank(painter);
 
@@ -1305,7 +1311,7 @@ bool evdi_painter_i2c_data_notify(struct evdi_painter *painter, struct i2c_msg *
 	}
 
 	if (msg->addr != I2C_ADDRESS_DDCCI) {
-		EVDI_DEBUG("Ignored ddc/ci data for address 0x%x\n", msg->addr);
+		EVDI_WARN("Ignored ddc/ci data for address 0x%x\n", msg->addr);
 		return false;
 	}
 

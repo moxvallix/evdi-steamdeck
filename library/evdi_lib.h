@@ -12,8 +12,8 @@ extern "C" {
 #endif
 
 #define LIBEVDI_VERSION_MAJOR 1
-#define LIBEVDI_VERSION_MINOR 10
-#define LIBEVDI_VERSION_PATCH 1
+#define LIBEVDI_VERSION_MINOR 12
+#define LIBEVDI_VERSION_PATCH 0
 
 struct evdi_lib_version {
 	int version_major;
@@ -107,7 +107,8 @@ evdi_handle evdi_open_attached_to(const char *sysfs_parent_device);
 void evdi_close(evdi_handle handle);
 void evdi_connect(evdi_handle handle, const unsigned char *edid,
 		  const unsigned int edid_length,
-		  const uint32_t sku_area_limit);
+		  const uint32_t pixel_area_limit,
+		  const uint32_t pixel_per_second_limit);
 void evdi_disconnect(evdi_handle handle);
 void evdi_enable_cursor_events(evdi_handle handle, bool enable);
 

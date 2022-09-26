@@ -24,7 +24,10 @@
 #if KERNEL_VERSION(5, 1, 0) <= LINUX_VERSION_CODE || defined(EL8)
 #include <drm/drm_probe_helper.h>
 #endif
-
+#if KERNEL_VERSION(5, 8, 0) <= LINUX_VERSION_CODE
+#include <drm/drm_managed.h>
+#endif
+#include <drm/drm_atomic_helper.h>
 #include "evdi_drm_drv.h"
 #include "evdi_platform_drv.h"
 #include "evdi_cursor.h"
@@ -92,7 +95,7 @@ static struct drm_driver driver = {
 	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_PRIME
 			 | DRIVER_ATOMIC,
 #endif
-	.unload = evdi_driver_unload,
+	.unload = evdi_drm_device_unload,
 
 	.open = evdi_driver_open,
 	.postclose = evdi_driver_postclose,
@@ -143,7 +146,15 @@ static struct drm_driver driver = {
 	.patchlevel = DRIVER_PATCH,
 };
 
-static int evdi_driver_setup(struct drm_device *dev)
+#if KERNEL_VERSION(5, 8, 0) <= LINUX_VERSION_CODE
+static void evdi_drm_device_release_cb(__always_unused struct drm_device *dev,
+				       __always_unused void *ptr)
+{
+	EVDI_INFO("Evdi drm_device removed.\n");
+}
+#endif
+
+static int evdi_drm_device_setup(struct drm_device *dev)
 {
 	struct evdi_device *evdi;
 	int ret;
@@ -181,6 +192,11 @@ static int evdi_driver_setup(struct drm_device *dev)
 
 	drm_kms_helper_poll_init(dev);
 
+#if KERNEL_VERSION(5, 8, 0) <= LINUX_VERSION_CODE
+	ret = drmm_add_action_or_reset(dev, evdi_drm_device_release_cb, NULL);
+	if (ret)
+		goto err_fb;
+#endif
 	return 0;
 
 err_fb:
@@ -195,7 +211,7 @@ err_free:
 	return ret;
 }
 
-void evdi_driver_unload(struct drm_device *dev)
+void evdi_drm_device_unload(struct drm_device *dev)
 {
 	struct evdi_device *evdi = dev->dev_private;
 
@@ -263,7 +279,7 @@ struct drm_device *evdi_drm_device_create(struct device *parent)
 	if (IS_ERR(dev))
 		return dev;
 
-	ret = evdi_driver_setup(dev);
+	ret = evdi_drm_device_setup(dev);
 	if (ret)
 		goto err_free;
 
@@ -281,6 +297,8 @@ err_free:
 int evdi_drm_device_remove(struct drm_device *dev)
 {
 	drm_dev_unplug(dev);
+	drm_atomic_helper_shutdown(dev);
+	drm_dev_put(dev);
 	return 0;
 }
 
